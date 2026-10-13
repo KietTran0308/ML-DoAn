@@ -14,7 +14,7 @@ df = pd.read_csv('../data/processed/hcm_housing_clean.csv').dropna(subset=['pric
 
 # --- FEATURE ENGINEERING (KỸ NGHỆ ĐẶC TRƯNG) ---
 # Tự tạo ra các biến mới giúp mô hình "thông minh" hơn
-df['avg_area_per_floor'] = df['area'] / df['floors'].replace(0, 1) # Tránh chia cho 0
+df['avg_area_per_floor'] = df['area'] / df['floors'].replace(0, 1)
 df['total_rooms'] = df['bedrooms'] + df['bathrooms']
 df['has_frontage'] = df['frontage'].apply(lambda x: 1 if pd.notnull(x) and x > 0 else 0)
 

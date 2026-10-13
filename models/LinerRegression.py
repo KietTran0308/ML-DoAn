@@ -24,7 +24,7 @@ def train_and_save_model(data_path, model_path):
         df = pd.read_csv(data_path)
     except FileNotFoundError:
         print(f"Lỗi: Không tìm thấy file dữ liệu tại {data_path}. Vui lòng kiểm tra lại đường dẫn.")
-        return None, None, None, None, None
+        return None, None, None, None
 
     df = df.dropna(subset=['price'])
 
