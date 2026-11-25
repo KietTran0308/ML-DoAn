@@ -1,0 +1,7 @@
+rule,n_rows,pct_of_total,n_only_this_rule
+area < 10 m2,4,0.03,4
+area > 200 m2,83,0.7,61
+frontage > 20 m,38,0.32,35
+giá/m2 < 0.33 x trung vị quận,91,0.77,72
+giá/m2 > 3 x trung vị quận,13,0.11,13
+TỔNG (hợp các quy tắc),207,1.76,
