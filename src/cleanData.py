@@ -1,11 +1,3 @@
-"""Loại outlier và ghi lại số dòng bị loại (task T11).
-
-Chạy:  python src/clean_data.py
-Đọc   data/processed/hcm_housing_clean.csv
-Ghi   data/processed/hcm_housing_filtered.csv   (đầu vào cho bước chia train/dev/test, T12)
-      reports/outlier_decision.csv              (bảng quy tắc -> số dòng, dùng cho báo cáo)
-Chạy TRƯỚC khi chia train/dev/test để cả 3 tập được làm sạch giống nhau.
-"""
 import pandas as pd
 
 from metrics import save_results
