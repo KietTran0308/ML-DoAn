@@ -6,7 +6,13 @@ import plotly.express as px
 import requests
 import streamlit as st
 
+import sys
+import joblib
+
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "src"))
+from preprocess import add_features, get_raw_columns
+
 API_URL = "http://127.0.0.1:8000"   # địa chỉ API (api.py)
 
 # ============================================================
@@ -756,53 +762,113 @@ def page_explore():
 # ============================================================
 # TRANG 4: HUẤN LUYỆN MÔ HÌNH (khung giao diện sẵn sàng kết nối)
 # ============================================================
-MODEL_CHOICES = ["Linear Regression", "Ridge Regression", "Decision Tree", "Random Forest", "Gradient Boosting", "XGBoost"]
+MODEL_FILES = {   # giữ giống api/api.py
+    "XGBoost": "xgboost.pkl",
+    "XGBoost Optimized": "xgboost_optimized_model.pkl",
+    "Random Forest": "random_forest.pkl",
+    "Random Forest (model 2)": "random_forest_model.pkl",
+    "Linear Regression": "linear.pkl",
+    "Linear Regression (Liner_Model)": "Liner_Model.pkl",
+    "Ridge Regression": "ridge.pkl",
+    "Lasso Regression": "lasso.pkl",
+}
+# Các file dự đoán thẳng giá (tỷ đồng); file còn lại dự đoán log1p(price)
+RAW_PRICE_FILES = {"Liner_Model.pkl"}
 
+
+def predict_price(model, file, df):
+    """Chuẩn bị đúng cột mà từng model cần, trả về giá dự đoán (tỷ đồng)."""
+    num_cols = ["area", "floors", "bedrooms", "bathrooms", "frontage", "access_road"]
+    raw_cols = list(get_raw_columns())
+    needed = list(getattr(model, "feature_names_in_", raw_cols))
+    cols = list(dict.fromkeys(raw_cols + [c for c in needed if c in df.columns]))
+    X = df.reindex(columns=cols)
+    nums = [c for c in num_cols if c in X.columns]
+    cats = [c for c in raw_cols if c not in num_cols]
+    X[nums] = X[nums].astype(float)
+    X[cats] = X[cats].astype(object).where(X[cats].notna(), np.nan)
+    if any(c not in X.columns for c in needed):
+        X = add_features(X.copy())   # tạo thêm các cột đặc trưng
+    missing = [c for c in needed if c not in X.columns]
+    if missing:
+        raise ValueError(f"Thiếu cột: {', '.join(missing)}")
+    pred = np.asarray(model.predict(X[needed]), dtype=float)
+    return pred if file in RAW_PRICE_FILES else np.expm1(pred)
+
+
+def evaluate_models(names):
+    dev = get_df("dev")
+    if dev is None:
+        st.warning("Chưa tìm thấy file dev.csv.")
+        return None
+
+    y = dev["price"].to_numpy()
+
+    rows = []
+    for name in names:
+        file = MODEL_FILES.get(name)
+        path = ROOT / "models" / file if file else None
+        if path is None or not path.exists():
+            st.warning(f"{name} chưa có model đã lưu để đánh giá.")
+            continue
+        try:
+            pred = predict_price(joblib.load(path), file, dev)
+            err = y - pred
+            rows.append({
+                "Mô hình": name,
+                "MAE": np.mean(np.abs(err)),
+                "RMSE": np.sqrt(np.mean(err ** 2)),
+                "R²": 1 - np.sum(err ** 2) / np.sum((y - y.mean()) ** 2),
+            })
+        except Exception as e:
+            st.warning(f"Không đánh giá được {name}: {e}")
+
+    return pd.DataFrame(rows).sort_values("RMSE") if rows else None
 
 def page_train():
-    page_header("🧠 Huấn luyện & Đánh giá mô hình", "So sánh hiệu năng các thuật toán hồi quy trên tập dữ liệu bất động sản.")
-    results = st.session_state.get("model_results")
+    page_header("Đánh giá mô hình", "So sánh hiệu năng các model đã lưu trên tập dữ liệu bất động sản.")
 
     left, right = st.columns([1, 1.65])
     with left:
         with st.container(border=True):
-            st.markdown("#### ⚙️ Thiết lập thí nghiệm")
+            st.markdown("#### ⚙️ Thiết lập đánh giá")
             st.info(f"📊 **Train:** {n_rows('train')} | **Dev:** {n_rows('dev')} | **Test:** {n_rows('test')} mẫu")
-            models = st.multiselect("Chọn các thuật toán so sánh", MODEL_CHOICES,
-                                    default=["Linear Regression", "Random Forest", "XGBoost"])
-            col_a, col_b = st.columns(2)
-            col_a.number_input("Random State", 0, 9999, 42)
-            col_b.selectbox("Target Transform", ["Log1p(price)", "Giữ nguyên (price)"])
+            available = [n for n, f in MODEL_FILES.items() if (ROOT / "models" / f).exists()]
+            models = st.multiselect("Chọn các model so sánh", available, default=available)
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            st.button("▶️ Chạy huấn luyện (Chờ tích hợp)", disabled=True, type="primary", use_container_width=True)
-            st.caption("💡 Nút sẽ tự động kích hoạt khi bạn nạp pipeline từ Notebook vào `app.py`.")
+            if st.button("📊 Đánh giá trên tập Dev", disabled=not models, type="primary", use_container_width=True):
+                with st.spinner("Đang đánh giá..."):
+                    st.session_state["model_results"] = evaluate_models(models)
+            st.caption("💡 Chỉ dùng các model đã lưu trong `models/`, không huấn luyện lại.")
+
+    results = st.session_state.get("model_results")
 
     with right:
         st.markdown("#### 📈 Bảng tổng hợp kết quả")
         if results is None:
-            c = st.columns(4)
-            for col, name, unit in zip(c, ["MAE", "RMSE", "R² Score", "Thời gian"], ["Sai số tuyệt đối", "Sai số toàn phương", "Độ phù hợp", "Giây"]):
+            c = st.columns(3)
+            for col, name, unit in zip(c, ["MAE", "RMSE", "R² Score"], ["Sai số tuyệt đối", "Sai số toàn phương", "Độ phù hợp"]):
                 with col: card(name, "—", unit)
             st.markdown("""
             <div class="empty-box">
-                <div style="font-size:1.1rem; font-weight:700; color:#f8fafc; margin-bottom:4px;">⏳ Chưa có dữ liệu huấn luyện</div>
-                Sau khi train model ở Notebook và lưu file <code>.pkl</code> / <code>.joblib</code>, bảng xếp hạng độ chính xác và biểu đồ <b>Actual vs Predicted</b> sẽ hiển thị tại đây.
+                <div style="font-size:1.1rem; font-weight:700; color:#f8fafc; margin-bottom:4px;">⏳ Chưa có kết quả đánh giá</div>
+                Bấm <b>Đánh giá trên tập Dev</b> để xem bảng xếp hạng và biểu đồ so sánh RMSE.
             </div>
             """, unsafe_allow_html=True)
             skeleton = pd.DataFrame({
-                "Thuật toán": models or ["Chưa chọn mô hình"],
-                "MAE (tỷ)": "—", "RMSE (tỷ)": "—", "R²": "—", "Trạng thái": "Chờ kết nối"
+                "Mô hình": models or ["Chưa chọn mô hình"],
+                "MAE (tỷ)": "—", "RMSE (tỷ)": "—", "R²": "—", "Trạng thái": "Chưa đánh giá"
             })
             show(st.dataframe, skeleton, hide_index=True)
         else:
             best = results.sort_values("RMSE").iloc[0]
             c = st.columns(3)
             with c[0]: card("Mô hình tối ưu", str(best["Mô hình"]), "RMSE thấp nhất trên tập Dev", accent=True)
-            with c[1]: card("RMSE tốt nhất", f'{best["RMSE"]:.3f} tỷ', "Sai số dự đoán trung bình")
+            with c[1]: card("RMSE tốt nhất", f'{best["RMSE"]:.3f} tỷ', "Căn bậc hai sai số bình phương TB")
             with c[2]: card("Hệ số R²", f'{best["R²"]:.3f}', "Mức độ giải thích phương sai")
             show(st.dataframe, results, hide_index=True)
             fig = px.bar(results, x="Mô hình", y="RMSE", color="RMSE", color_continuous_scale="Blues_r",
-                         title="So sánh sai số RMSE giữa các thuật toán")
+                         title="So sánh sai số RMSE giữa các model")
             plot(fig, H(300))
 
     section("Danh sách đặc trưng đầu vào (Features)")
@@ -974,13 +1040,12 @@ PAGES = {
     "🏠  Tổng quan dự án": page_overview,
     "🧹  Dữ liệu & Tiền xử lý": page_data,
     "📊  Khám phá dữ liệu": page_explore,
-    "🧠  Huấn luyện mô hình": page_train,
+    "🧠  Đánh giá mô hình": page_train,
     "🏡  Dự đoán giá nhà": page_predict,
 }
 
 with st.sidebar:
     st.markdown("## 🏙️ HCMC HOUSING")
-    st.caption("REAL ESTATE PRICE PREDICTION")
     st.markdown("---")
     page = st.radio("ĐIỀU HƯỚNG", list(PAGES), label_visibility="collapsed")
     st.markdown("---")

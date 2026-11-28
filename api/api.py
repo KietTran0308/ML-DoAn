@@ -9,18 +9,23 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent  # thư mục dự án (chứa app.py)
 sys.path.insert(0, str(ROOT / "src")) # chứa preprocess.py
-from preprocess import get_raw_columns
+from preprocess import add_features, get_raw_columns
 
 # Tên mô hình -> file trong thư mục models/ (mô hình đầu tiên là mặc định)
 MODEL_FILES = {
     "XGBoost": "xgboost.pkl",
+    "XGBoost Optimized": "xgboost_optimized_model.pkl",
     "Random Forest": "random_forest.pkl",
+    "Random Forest (model 2)": "random_forest_model.pkl",
     "Linear Regression": "linear.pkl",
+    "Linear Regression (Liner_Model)": "Liner_Model.pkl",
     "Ridge Regression": "ridge.pkl",
     "Lasso Regression": "lasso.pkl",
 }
+# Các file dự đoán thẳng giá (tỷ đồng); file còn lại dự đoán log1p(price)
+RAW_PRICE_FILES = {"Liner_Model.pkl"}
 
 
 @lru_cache(maxsize=10)
@@ -29,7 +34,25 @@ def load_model(path, modified_time):
     return joblib.load(path)
 
 
-NUM_COLS = ["area", "floors", "bedrooms", "bathrooms", "frontage", "access_road"]
+def predict_price(model, file, df):
+    """Chuẩn bị đúng cột mà từng model cần, trả về giá dự đoán (tỷ đồng)."""
+    num_cols = ["area", "floors", "bedrooms", "bathrooms", "frontage", "access_road"]
+    raw_cols = list(get_raw_columns())
+    needed = list(getattr(model, "feature_names_in_", raw_cols))
+    cols = list(dict.fromkeys(raw_cols + [c for c in needed if c in df.columns]))
+    X = df.reindex(columns=cols)
+    nums = [c for c in num_cols if c in X.columns]
+    cats = [c for c in raw_cols if c not in num_cols]
+    X[nums] = X[nums].astype(float)
+    X[cats] = X[cats].astype(object).where(X[cats].notna(), np.nan)
+    if any(c not in X.columns for c in needed):
+        X = add_features(X.copy())   # tạo thêm các cột đặc trưng
+    missing = [c for c in needed if c not in X.columns]
+    if missing:
+        raise ValueError(f"Thiếu cột: {', '.join(missing)}")
+    pred = np.asarray(model.predict(X[needed]), dtype=float)
+    return pred if file in RAW_PRICE_FILES else np.expm1(pred)
+
 
 app = FastAPI(title="API dự đoán giá nhà TP.HCM")
 
@@ -66,9 +89,8 @@ def predict(house: House):
         raise HTTPException(500, f"Không nạp được model: {e}")
 
     data = house.model_dump(exclude={"model"})
-    row = pd.DataFrame([data]).reindex(columns=get_raw_columns())
-    cat_cols = [c for c in row.columns if c not in NUM_COLS]
-    row[NUM_COLS] = row[NUM_COLS].astype(float)
-    row[cat_cols] = row[cat_cols].astype(object).where(row[cat_cols].notna(), np.nan)
-    price = float(np.expm1(model.predict(row)[0]))   # đổi từ log về tỷ đồng
+    try:
+        price = float(predict_price(model, path.name, pd.DataFrame([data]))[0])
+    except Exception as e:
+        raise HTTPException(500, f"Không dự đoán được: {e}")
     return {"model": house.model, "predicted_price": round(price, 2), "unit": "tỷ đồng"}
